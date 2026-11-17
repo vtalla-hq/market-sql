@@ -26,6 +26,7 @@ Rules:
 - Prefer clear column aliases (e.g. pct_change, avg_close) and order results meaningfully.
 - Return at most 1000 rows.
 - For "recent"/"last N days" questions, anchor on the latest trading date given in the question context, not now().
+- If the question cannot be answered from these tables (missing data, or a request to modify data or read anything else), reply with exactly CANNOT_ANSWER: followed by a one-sentence reason, instead of SQL. Never substitute a query that answers a different question.
 
 Example - daily returns and the worst days for one stock:
 WITH r AS (
@@ -60,7 +61,45 @@ export async function generateSql(question: string, schemaPrompt: string, latest
   const res = await withRateLimitRetry(() => client.chat.completions.create({ model: LLM.model, temperature: 0, messages }));
   const text = res.choices[0]?.message?.content ?? "";
   if (!text.trim()) throw new Error("The model returned an empty response.");
+  const cannot = text.match(/CANNOT_ANSWER:?\s*(.*)/i);
+  if (cannot) throw new UnanswerableError(cannot[1].trim().slice(0, 300) || "the data doesn't cover it");
   return cleanSql(text);
+}
+
+export class UnanswerableError extends Error {
+  constructor(reason: string) {
+    super(`This question can't be answered from the available data: ${reason}`);
+  }
+}
+
+/** Second pass for empty or all-null results: does this SQL actually answer the question? */
+export async function judgeSql(question: string, sql: string, outcome: string, schemaPrompt: string): Promise<{ answers: boolean | null; reason: string }> {
+  const res = await withRateLimitRetry(() =>
+    client.chat.completions.create({
+      model: LLM.model,
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You review SQL written for this stock market database.\n\n" + schemaPrompt + "\n\n" +
+            "The query below returned an empty or all-null result. Judge only the SQL's logic: would it return the right rows " +
+            "if matching data existed? Reply YES if the logic is right (the data may just have no matches, e.g. outside the " +
+            "date range a table covers), or NO if the logic is wrong (wrong filter, join, column, date math or sort). " +
+            "First line: YES or NO. Second line: one short sentence why.",
+        },
+        { role: "user", content: `Question: ${question}\n\nSQL:\n${sql}\n\nResult: ${outcome}` },
+      ],
+    }),
+  );
+  return parseVerdict(res.choices[0]?.message?.content ?? "");
+}
+
+/** First standalone YES/NO wins; small models don't always put it on line one. null = no verdict. */
+export function parseVerdict(text: string): { answers: boolean | null; reason: string } {
+  const m = text.match(/\b(YES|NO)\b/) ?? text.match(/\b(yes|no)\b/i);
+  const reason = text.replace(/\b(YES|NO)\b[.:,]?/, "").replace(/\s+/g, " ").trim().slice(0, 300);
+  return { answers: m ? m[1].toLowerCase() === "yes" : null, reason };
 }
 
 /** On a 429, waits for retry-after once and retries; a second 429 becomes RateLimitedError. */
