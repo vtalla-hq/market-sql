@@ -5,7 +5,7 @@
 
 **Ask stock market questions in plain English: an LLM writes Postgres SQL, six guardrails check it, and it runs read-only, measured against a 55-question eval.**
 
-**Live demo:** LIVE_URL_PLACEHOLDER
+**Live demo:** https://market-sql.vercel.app (Groq `openai/gpt-oss-120b`, 10 questions/min per IP)
 
 <!-- TODO(vtalla): record a 30s demo GIF (ask a chip question, open the SQL, show the chart, then try "drop the prices table") and embed it here: ![demo](docs/demo.gif) -->
 
@@ -70,6 +70,12 @@ Every provider goes through one OpenAI-compatible client (the `openai` npm packa
 | Ollama | `http://localhost:11434/v1` | `ollama` | `qwen2.5-coder:7b` | local dev + eval, free |
 | Groq | `https://api.groq.com/openai/v1` | from console.groq.com/keys | `openai/gpt-oss-120b` | deployed demo, free tier |
 | Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | from aistudio.google.com/apikey | `gemini-3.8-flash` | fallback, free tier |
+
+To eval another provider without editing `.env`, override the vars inline (shell env wins over `--env-file`):
+
+```bash
+LLM_BASE_URL=https://api.groq.com/openai/v1 LLM_MODEL=openai/gpt-oss-120b LLM_API_KEY=gsk_... EVAL_DELAY_MS=20000 npm run eval
+```
 
 Model IDs checked against each provider's docs on 2026-11-17. Groq shut down `llama-3.3-70b-versatile` for free/dev tiers on 2026-08-16, and Gemini deprecated `gemini-2.5-flash`, so the presets use their recommended successors.
 
