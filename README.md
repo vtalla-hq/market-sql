@@ -1,8 +1,37 @@
 # market-sql
 
-Ask questions about stock market data in plain English; an LLM writes Postgres SQL, guardrails validate it, and it runs read-only.
+[![ci](https://github.com/vtalla-hq/market-sql/actions/workflows/ci.yml/badge.svg)](https://github.com/vtalla-hq/market-sql/actions/workflows/ci.yml)
+[![ingest](https://github.com/vtalla-hq/market-sql/actions/workflows/ingest.yml/badge.svg)](https://github.com/vtalla-hq/market-sql/actions/workflows/ingest.yml)
 
-Work in progress: Phases 1-3 (ingest, query loop, guardrails) are done.
+**Ask stock market questions in plain English: an LLM writes Postgres SQL, six guardrails check it, and it runs read-only, measured against a 55-question eval.**
+
+**Live demo:** LIVE_URL_PLACEHOLDER
+
+<!-- TODO(vtalla): record a 30s demo GIF (ask a chip question, open the SQL, show the chart, then try "drop the prices table") and embed it here: ![demo](docs/demo.gif) -->
+
+50 S&P 500 stocks across all 11 sectors: 5 years of daily prices, SEC filings (8-K, 10-Q, 10-K, Form 4) and business news, refreshed daily.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph ingest["GitHub Actions, daily cron"]
+    Y[yfinance] --> P[prices.py]
+    S[SEC data.sec.gov] --> F[filings.py<br/>Scrapling spider]
+    R[CNBC / MarketWatch /<br/>PR Newswire RSS] --> N[news.py<br/>Scrapling XMLFeedSpider]
+  end
+  P & F & N -->|owner role, upserts| DB[(Supabase Postgres<br/>tickers, prices,<br/>news, filings)]
+
+  U[Browser] -->|question| API["/api/query<br/>Next.js on Vercel"]
+  API -->|schema + comments + sample rows| LLM["LLM via OpenAI-compatible API<br/>Groq / Ollama / Gemini"]
+  LLM -->|SQL| G{Guardrails<br/>parse, SELECT-only,<br/>schema grounding, LIMIT}
+  G -->|unknown table/column:<br/>error back, max 2 retries| LLM
+  G -->|ok| X[Read-only role<br/>READ ONLY txn, 5s timeout]
+  X --> DB
+  X -->|0 rows / all null| J[LLM second pass:<br/>does the SQL answer it?]
+  X & J -->|rows, SQL, warnings| U
+  API -.->|every attempt| L[(private.query_log<br/>write-only for the app)]
+```
 
 ## Guardrails
 
@@ -65,4 +94,17 @@ psql "$DATABASE_URL" -f db/schema.sql
 cd ingest && python tickers.py && python prices.py && python news.py && python filings.py
 ```
 
-The `ingest` GitHub Action runs the same scripts daily; it needs `DATABASE_URL` and `EDGAR_USER_AGENT` repo secrets.
+The `ingest` GitHub Action runs the same scripts daily; it needs `DATABASE_URL` and `EDGAR_USER_AGENT` repo secrets. Each run logs rows seen / invalid / inserted, upserts are idempotent (dedupe on URL), and a source that returns zero valid rows fails the job.
+
+## Data sources and scraping ethics
+
+| Data | Source | How |
+|---|---|---|
+| Daily prices | Yahoo Finance via `yfinance` | library, split/dividend-adjusted |
+| SEC filings | `data.sec.gov` submissions API | Scrapling `Spider`, JSON |
+| News headlines | CNBC, MarketWatch, PR Newswire RSS | Scrapling `XMLFeedSpider`, headlines matched to company names |
+
+- **robots.txt is obeyed** (`robots_txt_obey = True`) and every spider runs with autothrottle. A source that blocks us is dropped, never worked around.
+- **Honest User-Agent.** The scrapers identify as `market-sql/0.1` and never impersonate a browser. SEC requests carry a real name and email, as SEC's fair-access policy requires, and are capped at 8 requests/second (SEC's limit is 10).
+- **Sources ruled out:** EDGAR's per-company Atom feeds live under `/cgi-bin`, which sec.gov's robots.txt disallows, so filings come from the official JSON API instead. Yahoo's RSS host and Google News disallow crawling. Nasdaq's per-symbol RSS resets connections for non-browser User-Agents, so it was treated as blocked rather than spoofed.
+- **Only headlines and links are stored**, not article text. News history starts from the first ingest run (Nov 2026), so it's much shallower than prices and filings.
