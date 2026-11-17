@@ -33,6 +33,7 @@ const SAFETY = `- Output exactly one read-only SELECT statement (CTEs allowed).
 const TIPS = `- When joining, give every table an alias and prefix every column with it (p.symbol, t.sector), including in GROUP BY and ORDER BY.
 - Window functions always need OVER: lag(p.close) OVER (PARTITION BY p.symbol ORDER BY p.date). Compute them in a CTE, then filter or aggregate in the outer query (you cannot nest a window function inside an aggregate).
 - Prefer clear column aliases (e.g. pct_change, avg_close) and order results meaningfully.
+- Return the columns a reader needs to understand each row: always include the date for anything over time, and the symbol (or sector) for anything per stock (or per sector).
 - For "recent"/"last N days" questions, anchor on the latest trading date given in the question context, not now().
 
 Example - daily returns and the worst days for one stock:
