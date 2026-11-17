@@ -6,3 +6,5 @@ __pycache__/
 .scrapling_cache/
 node_modules/
 .next/
+next-env.d.ts
+*.tsbuildinfo
