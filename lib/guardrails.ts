@@ -74,6 +74,8 @@ export function check(sql: string, schema: SchemaColumns): Check {
   const aliasToTable = new Map<string, string>();
   for (const t of tables) {
     if (t.db && lc(t.db) !== "public") return fail("forbidden_schema", `Only the public tables ${Object.keys(schema).join(", ")} may be queried, not ${t.db}.${t.table}.`);
+    // Unqualified pg_* names resolve to pg_catalog through the search path (pg_authid, pg_user, pg_stat_activity...).
+    if (t.table.startsWith("pg_") && !schema[t.table]) return fail("forbidden_schema", `System catalog ${t.table} may not be queried.`);
     if (!schema[t.table] && !derived.has(t.table)) {
       return fail("unknown_table", `Table "${t.table}" does not exist. Available tables: ${Object.keys(schema).join(", ")}.`, true);
     }

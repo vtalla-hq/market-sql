@@ -90,6 +90,7 @@ describe("stacked statements and comments are blocked", () => {
 describe("other schemas and server functions are blocked", () => {
   it("information_schema", () => blocked("select * from information_schema.tables", "forbidden_schema"));
   it("pg_catalog", () => blocked("select usename from pg_catalog.pg_user", "forbidden_schema"));
+  it("unqualified catalog table", () => blocked("select rolname, rolpassword from pg_authid", "forbidden_schema"));
   it("query_log", () => blocked("select * from private.query_log", "forbidden_schema"));
   it("pg_sleep", () => blocked("select pg_sleep(30)", "forbidden_function"));
   it("pg_read_file", () => blocked("select pg_read_file('/etc/passwd')", "forbidden_function"));

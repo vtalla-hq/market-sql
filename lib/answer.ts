@@ -15,16 +15,24 @@ export type Answer = {
   guardrail: Guardrail | "postgres" | "empty_result" | "unanswerable" | null; // last guardrail that fired
   attempts: number;
   latencyMs: number;
+  drafts: string[]; // every SQL the model produced, in order
 };
 
-/** Question -> SQL -> guardrails -> read-only execution, with retries on fixable errors. Logs every call. */
-export async function answer(question: string): Promise<Answer> {
+/**
+ * Question -> SQL -> guardrails -> read-only execution, with retries on fixable errors. Logs every call.
+ * guardrails: false is the eval baseline: a prompt without the safety rules, one draft, executed as-is with
+ * no app-level checks, retries, row cap or review. It still runs as the read-only DB role; LLM SQL never runs as the owner.
+ */
+export async function answer(question: string, { guardrails = true } = {}): Promise<Answer> {
   const t0 = Date.now();
   const tried: (Attempt & { guardrail: string })[] = [];
+  const drafts: string[] = [];
   let sql: string | null = null;
 
-  const done = async (a: Omit<Answer, "attempts" | "latencyMs">): Promise<Answer> => {
-    const full = { ...a, attempts: Math.max(1, tried.length + (a.outcome === "ok" ? 1 : 0)), latencyMs: Date.now() - t0 };
+  if (!guardrails) return answerUnguarded(question, t0, drafts);
+
+  const done = async (a: Omit<Answer, "attempts" | "latencyMs" | "drafts">): Promise<Answer> => {
+    const full = { ...a, attempts: Math.max(1, tried.length + (a.outcome === "ok" ? 1 : 0)), latencyMs: Date.now() - t0, drafts };
     await logQuery({
       question, sql: a.sql, guardrail: a.guardrail, outcome: a.outcome, attempts: full.attempts,
       rowCount: a.rows?.length ?? null, latencyMs: full.latencyMs, model: `${LLM.baseURL} ${LLM.model}`, detail: tried,
@@ -36,6 +44,7 @@ export async function answer(question: string): Promise<Answer> {
     const schema = await getSchema();
     for (;;) {
       sql = await generateSql(question, schema.prompt, schema.latestPriceDate, tried);
+      drafts.push(sql);
       const c = check(sql, schema.columns);
       if (!c.ok && !c.retryable) {
         tried.push({ sql, error: c.error, guardrail: c.guardrail });
@@ -85,5 +94,21 @@ export async function answer(question: string): Promise<Answer> {
     if (e instanceof UnanswerableError) return done({ outcome: "failed", sql, warnings: [], error: e.message, guardrail: "unanswerable" });
     console.error(e);
     return done({ outcome: "error", sql, warnings: [], error: (e as Error).message, guardrail: null });
+  }
+}
+
+async function answerUnguarded(question: string, t0: number, drafts: string[]): Promise<Answer> {
+  const base = { warnings: [], guardrail: null, attempts: 1, drafts };
+  let sql: string | null = null;
+  try {
+    const schema = await getSchema();
+    sql = await generateSql(question, schema.prompt, schema.latestPriceDate, [], false);
+    drafts.push(sql);
+    const { columns, rows } = await runReadOnly(sql);
+    return { ...base, outcome: "ok", sql, columns, rows, latencyMs: Date.now() - t0 };
+  } catch (e) {
+    const outcome = e instanceof RateLimitedError ? "rate_limited" : sql || e instanceof UnanswerableError ? "failed" : "error";
+    const guardrail = e instanceof UnanswerableError ? "unanswerable" : sql ? "postgres" : null;
+    return { ...base, outcome, guardrail, sql, error: (e as Error).message, latencyMs: Date.now() - t0 };
   }
 }

@@ -7,7 +7,7 @@ export type Schema = {
   columns: Record<string, string[]>;
   /** schema description fed to the LLM */
   prompt: string;
-  /** most recent trading day in prices, so "last week" etc. can be anchored */
+  /** e.g. "prices cover 2021-11-17 to 2026-11-16 (latest trading day)", so relative dates can be anchored */
   latestPriceDate: string;
 };
 
@@ -38,7 +38,9 @@ async function load(): Promise<Schema> {
     );
   }
   const latest = await pool.query<{ d: string }>("select max(date) d from prices");
-  return { columns, prompt: parts.join("\n\n"), latestPriceDate: latest.rows[0].d };
+  const lo = (await pool.query<{ d: string }>("select min(date) d from prices")).rows[0].d;
+  const hi = latest.rows[0].d;
+  return { columns, prompt: parts.join("\n\n"), latestPriceDate: `${hi} (prices cover ${lo} to ${hi})` };
 }
 
 let cached: Promise<Schema> | null = null;

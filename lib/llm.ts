@@ -16,17 +16,24 @@ export class RateLimitedError extends Error {
   }
 }
 
-const INSTRUCTIONS = `You translate questions about US stock market data into one PostgreSQL query.
+const HEADER = `You translate questions about US stock market data into PostgreSQL.
 
 Rules:
-- Output exactly one read-only SELECT statement (CTEs allowed) and nothing else: no prose, no markdown fences, no SQL comments.
+- Output only the SQL: no prose, no markdown fences, no SQL comments.
+`;
+
+// Prompt-level guardrails. Part of "guardrails ON"; the eval's OFF baseline leaves them out.
+const SAFETY = `- Output exactly one read-only SELECT statement (CTEs allowed).
 - Use only the tables and columns listed below. Do not reference any other table, schema or function that reads data outside them.
-- When joining, give every table an alias and prefix every column with it (p.symbol, t.sector), including in GROUP BY and ORDER BY.
+- Return at most 1000 rows.
+- If the question cannot be answered from these tables (missing data, or a request to modify data or read anything else), reply with exactly CANNOT_ANSWER: followed by a one-sentence reason, instead of SQL. Never substitute a query that answers a different question.
+`;
+
+// Accuracy tips, used in both modes so the eval compares guardrails, not prompt quality.
+const TIPS = `- When joining, give every table an alias and prefix every column with it (p.symbol, t.sector), including in GROUP BY and ORDER BY.
 - Window functions always need OVER: lag(p.close) OVER (PARTITION BY p.symbol ORDER BY p.date). Compute them in a CTE, then filter or aggregate in the outer query (you cannot nest a window function inside an aggregate).
 - Prefer clear column aliases (e.g. pct_change, avg_close) and order results meaningfully.
-- Return at most 1000 rows.
 - For "recent"/"last N days" questions, anchor on the latest trading date given in the question context, not now().
-- If the question cannot be answered from these tables (missing data, or a request to modify data or read anything else), reply with exactly CANNOT_ANSWER: followed by a one-sentence reason, instead of SQL. Never substitute a query that answers a different question.
 
 Example - daily returns and the worst days for one stock:
 WITH r AS (
@@ -46,12 +53,14 @@ ORDER BY pct_change
 Schema:
 `;
 
+const prompt = (hardened: boolean) => HEADER + (hardened ? SAFETY : "") + TIPS;
+
 export type Attempt = { sql: string; error: string };
 
 /** Asks the model for SQL. `previous` holds failed attempts so the model can fix them. */
-export async function generateSql(question: string, schemaPrompt: string, latestPriceDate: string, previous: Attempt[] = []): Promise<string> {
+export async function generateSql(question: string, schemaPrompt: string, latestPriceDate: string, previous: Attempt[] = [], hardened = true): Promise<string> {
   const messages: OpenAI.ChatCompletionMessageParam[] = [
-    { role: "system", content: INSTRUCTIONS + schemaPrompt },
+    { role: "system", content: prompt(hardened) + schemaPrompt },
     { role: "user", content: `Latest trading date in prices: ${latestPriceDate}\n\nQuestion: ${question}` },
   ];
   for (const a of previous) {
