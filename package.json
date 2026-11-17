@@ -8,7 +8,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "eval": "tsx --env-file=.env eval/run.mts",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "eval:groq": "node --env-file=.env -e \"process.env.LLM_BASE_URL='https://api.groq.com/openai/v1';process.env.LLM_MODEL='openai/gpt-oss-120b';process.env.LLM_API_KEY=process.env.GROQ_API_KEY;process.env.EVAL_DELAY_MS??='20000';require('child_process').execSync('npx tsx eval/run.mts',{stdio:'inherit',env:process.env})\""
   },
   "dependencies": {
     "next": "^16.4.6",
